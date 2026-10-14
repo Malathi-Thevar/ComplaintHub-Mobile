@@ -1,0 +1,30 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "emulators": {
+    "firestore": {
+      "port": 8080
+    }
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "complainthub-tce",
+          "appId": "1:1047359305007:android:ec0a2d28fea17aedaa1dda",
+          "fileOutput": "android/app/google-services.json"
+        }
+      }
+    },
+    "dart": {
+      "lib/firebase_options.dart": {
+        "projectId": "complainthub-tce",
+        "configurations": {
+          "android": "1:1047359305007:android:ec0a2d28fea17aedaa1dda"
+        }
+      }
+    }
+  }
+}

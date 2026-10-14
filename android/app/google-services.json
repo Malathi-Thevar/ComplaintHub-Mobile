@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1047359305007",
+    "project_id": "complainthub-tce",
+    "storage_bucket": "complainthub-tce.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1047359305007:android:ec0a2d28fea17aedaa1dda",
+        "android_client_info": {
+          "package_name": "com.example.complaint_hub"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAppqJxm5qTwRUVdTscHb7P4EvRJmRO-0w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

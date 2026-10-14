@@ -1,0 +1,279 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId} (matches Firebase Auth UID)
+    // Fields:
+    //   - uid: string (required, 1-128 chars, immutable, matches userId and request.auth.uid)
+    //   - registerNumber: string (required, 3-30 chars, immutable)
+    //   - fullName: string (required, 1-100 chars)
+    //   - department: string (required, 1-100 chars)
+    //   - email: string (required, valid email, matches request.auth.token.email, immutable)
+    //   - academicYear: string (required, 1-30 chars)
+    //   - createdAt: timestamp (required, immutable)
+    //   - updatedAt: timestamp (required)
+    //
+    // Collection: registerNumbers
+    // Document ID: {regNo} (normalized register number, e.g. 820621104001)
+    // Fields:
+    //   - uid: string (required, matches request.auth.uid, immutable)
+    //   - createdAt: timestamp (required, immutable)
+    //
+    // Collection: complaints
+    // Document ID: {complaintId}
+    // Fields:
+    //   - id: string (required, 1-50 chars)
+    //   - userId: string (required, 1-128 chars, matches request.auth.uid)
+    //   - category: string (required, 1-100 chars)
+    //   - concernedDepartment: string (required, 1-100 chars)
+    //   - subject: string (required, 1-200 chars)
+    //   - description: string (required, 1-5000 chars)
+    //   - attachmentName: string or null (optional, 0-255 chars)
+    //   - status: string (required, MUST be 'pending' on creation)
+    //   - submittedAt: timestamp (required)
+    //   - updatedAt: timestamp (required)
+    //
+    // Subcollection: complaints/{complaintId}/statusHistory
+    // Document ID: {entryId} (client creation restricted to 'initial' in complaint creation batch)
+    // Fields:
+    //   - title: string (required, 1-100 chars)
+    //   - description: string (required, 0-1000 chars)
+    //   - status: string (required, 'pending' on initial student creation)
+    //   - timestamp: timestamp (required)
+    //   - isCompleted: bool (required)
+    //   - isActive: bool (required)
+    //   - updatedBy: string (required, matches request.auth.uid)
+    //
+    // Subcollection: complaints/{complaintId}/followUps
+    // Document ID: {entryId}
+    // Fields:
+    //   - userId: string (required, matches request.auth.uid)
+    //   - authorName: string (required, 1-100 chars)
+    //   - description: string (required, non-empty, 1-2000 chars)
+    //   - timestamp: timestamp (required)
+    //
+    // Subcollection: users/{userId}/notifications
+    // Document ID: {notificationId}
+    // Fields:
+    //   - id: string (optional, 0-50 chars)
+    //   - title: string (required, 1-200 chars)
+    //   - description: string (required, 0-1000 chars)
+    //   - timestamp: timestamp (required)
+    //   - isRead: bool (required, student mutable)
+    //   - isNew: bool (required, student mutable)
+    //   - complaintId: string or null (optional, 0-50 chars)
+    //   - isAnnouncement: bool (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidEmail(email) {
+      return email is string &&
+        email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // Check if the authenticated user owns the parent complaint document
+    function isParentComplaintOwner(complaintId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/complaints/$(complaintId)) &&
+        get(/databases/$(database)/documents/complaints/$(complaintId)).data.userId == request.auth.uid;
+    }
+
+    // Check parent complaint ownership for atomic batch create operations
+    function isParentComplaintOwnerOnCreate(complaintId) {
+      return isAuthenticated() &&
+        existsAfter(/databases/$(database)/documents/complaints/$(complaintId)) &&
+        getAfter(/databases/$(database)/documents/complaints/$(complaintId)).data.userId == request.auth.uid;
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['uid', 'registerNumber', 'fullName', 'department', 'email', 'academicYear', 'createdAt', 'updatedAt']) &&
+        hasRequiredFields(['uid', 'registerNumber', 'fullName', 'department', 'email', 'academicYear', 'createdAt', 'updatedAt']) &&
+        data.uid is string && data.uid.size() > 0 && data.uid.size() <= 128 &&
+        data.registerNumber is string && data.registerNumber.size() >= 3 && data.registerNumber.size() <= 30 &&
+        data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 100 &&
+        data.department is string && data.department.size() >= 1 && data.department.size() <= 100 &&
+        data.email is string && isValidEmail(data.email) && data.email.size() <= 150 &&
+        data.academicYear is string && data.academicYear.size() >= 1 && data.academicYear.size() <= 30 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidComplaint(data) {
+      return hasOnlyAllowedFields(['id', 'userId', 'category', 'concernedDepartment', 'subject', 'description', 'attachmentName', 'status', 'submittedAt', 'updatedAt']) &&
+        hasRequiredFields(['id', 'userId', 'category', 'concernedDepartment', 'subject', 'description', 'status', 'submittedAt', 'updatedAt']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 50 &&
+        data.userId is string && data.userId == request.auth.uid &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 100 &&
+        data.concernedDepartment is string && data.concernedDepartment.size() >= 1 && data.concernedDepartment.size() <= 100 &&
+        data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 200 &&
+        data.description is string && data.description.size() >= 1 && data.description.size() <= 5000 &&
+        (!('attachmentName' in data) || data.attachmentName == null || (data.attachmentName is string && data.attachmentName.size() <= 255)) &&
+        data.status == 'pending' &&
+        data.submittedAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStatusHistory(data) {
+      return hasOnlyAllowedFields(['title', 'description', 'status', 'timestamp', 'isCompleted', 'isActive', 'updatedBy']) &&
+        hasRequiredFields(['title', 'description', 'status', 'timestamp', 'isCompleted', 'isActive', 'updatedBy']) &&
+        data.title is string && data.title.size() > 0 && data.title.size() <= 100 &&
+        data.description is string && data.description.size() <= 1000 &&
+        data.status == 'pending' &&
+        data.timestamp is timestamp &&
+        data.isCompleted is bool &&
+        data.isActive is bool &&
+        data.updatedBy is string && data.updatedBy == request.auth.uid;
+    }
+
+    function isValidFollowUp(data) {
+      return hasOnlyAllowedFields(['userId', 'authorName', 'description', 'timestamp']) &&
+        hasRequiredFields(['userId', 'authorName', 'description', 'timestamp']) &&
+        data.userId is string && data.userId == request.auth.uid &&
+        data.authorName is string && data.authorName.size() > 0 && data.authorName.size() <= 100 &&
+        data.description is string && data.description.size() > 0 && data.description.size() <= 2000 &&
+        data.timestamp is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return hasOnlyAllowedFields(['id', 'title', 'description', 'timestamp', 'isRead', 'isNew', 'complaintId', 'isAnnouncement']) &&
+        hasRequiredFields(['title', 'description', 'timestamp', 'isRead', 'isNew', 'isAnnouncement']) &&
+        data.title is string && data.title.size() > 0 && data.title.size() <= 200 &&
+        data.description is string && data.description.size() <= 1000 &&
+        data.timestamp is timestamp &&
+        data.isRead is bool &&
+        data.isNew is bool &&
+        (!('id' in data) || data.id == null || (data.id is string && data.id.size() <= 50)) &&
+        (!('complaintId' in data) || data.complaintId == null || (data.complaintId is string && data.complaintId.size() <= 50)) &&
+        data.isAnnouncement is bool;
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // 1. Users collection
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+
+      // Student registration: atomic batch with registerNumbers/{regNo}
+      allow create: if isOwner(userId) &&
+        request.resource.data.uid == userId &&
+        request.resource.data.email == request.auth.token.email &&
+        isValidUser(request.resource.data) &&
+        existsAfter(/databases/$(database)/documents/registerNumbers/$(request.resource.data.registerNumber)) &&
+        getAfter(/databases/$(database)/documents/registerNumbers/$(request.resource.data.registerNumber)).data.uid == userId;
+
+      allow update: if isOwner(userId) &&
+        isValidUser(request.resource.data) &&
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.email == resource.data.email &&
+        request.resource.data.registerNumber == resource.data.registerNumber &&
+        request.resource.data.createdAt == resource.data.createdAt;
+
+      allow delete: if false;
+
+      // Notifications subcollection
+      match /notifications/{notificationId} {
+        allow read: if isOwner(userId);
+
+        // Client creation denied; system backend creates notifications
+        allow create: if false;
+
+        // Student may only update read and new status flags
+        allow update: if isOwner(userId) &&
+          isValidNotification(request.resource.data) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'isNew']);
+
+        allow delete: if isOwner(userId);
+      }
+    }
+
+    // 2. Register Numbers reservation collection (Guarantees unique register number per student)
+    match /registerNumbers/{regNo} {
+      allow read: if isAuthenticated() && resource.data.uid == request.auth.uid;
+
+      allow create: if isAuthenticated() &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.createdAt is timestamp &&
+        hasOnlyAllowedFields(['uid', 'createdAt']) &&
+        hasRequiredFields(['uid', 'createdAt']) &&
+        !exists(/databases/$(database)/documents/registerNumbers/$(regNo));
+
+      allow update, delete: if false;
+    }
+
+    // 3. Complaints collection
+    match /complaints/{complaintId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+
+      allow create: if isAuthenticated() &&
+        request.auth.uid == request.resource.data.userId &&
+        request.resource.data.status == 'pending' &&
+        isValidComplaint(request.resource.data);
+
+      allow update, delete: if false;
+
+      // 4. Status History subcollection
+      // Client creation is restricted strictly to entryId == 'initial' in the atomic batch creating the complaint
+      match /statusHistory/{entryId} {
+        allow read: if isParentComplaintOwner(complaintId);
+
+        allow create: if entryId == 'initial' &&
+          isParentComplaintOwnerOnCreate(complaintId) &&
+          !exists(/databases/$(database)/documents/complaints/$(complaintId)) &&
+          existsAfter(/databases/$(database)/documents/complaints/$(complaintId)) &&
+          request.resource.data.status == 'pending' &&
+          request.resource.data.updatedBy == request.auth.uid &&
+          isValidStatusHistory(request.resource.data);
+
+        allow update, delete: if false;
+      }
+
+      // 5. Follow-ups subcollection
+      match /followUps/{entryId} {
+        allow read: if isParentComplaintOwner(complaintId);
+
+        allow create: if isParentComplaintOwner(complaintId) &&
+          request.resource.data.userId == request.auth.uid &&
+          isValidFollowUp(request.resource.data);
+
+        allow update, delete: if false;
+      }
+    }
+
+    // Default deny for all other collections and unauthenticated paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
